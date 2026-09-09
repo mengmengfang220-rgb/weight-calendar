@@ -58,16 +58,16 @@ jobs:
 
       - name: 5. 编译生成 Android APK (使用专属固定签名，解决覆盖安装签名不一致)
         env:
-          FLET_ANDROID_SIGNING_KEY_STORE: release.keystore
+          FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/release.keystore
           FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: weight123456
           FLET_ANDROID_SIGNING_KEY_ALIAS: weightcalendar
           FLET_ANDROID_SIGNING_KEY_PASSWORD: weight123456
         run: |
           yes | flet build apk --project "WeightCalendar" --org "com.weight.calendar" \
-            --android-signing-key-store release.keystore \
+            --android-signing-key-store "${{ github.workspace }}/release.keystore" \
             --android-signing-key-store-password "weight123456" \
             --android-signing-key-alias "weightcalendar" \
-            --android-signing-key-password "weight123456" -vv
+            --android-signing-key-password "weight123456"
 
       - name: 6. 上传编译产物 APK (供网页直接下载)
         uses: actions/upload-artifact@v4
