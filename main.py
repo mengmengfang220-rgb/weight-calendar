@@ -537,27 +537,82 @@ def main(page: ft.Page):
     def open_backup_restore_dialog():
         """弹出数据备份与恢复对话框，支持一键复制导出 JSON 与粘贴导入恢复"""
         json_str = json.dumps(records, ensure_ascii=False, indent=2)
+        backup_display = ft.TextField(
+            value=json_str,
+            read_only=True,
+            label="当前备份 JSON 数据（可长按全选复制）",
+            multiline=True,
+            min_lines=2,
+            max_lines=4,
+            text_size=11,
+        )
         restore_input = ft.TextField(
             label="粘贴备份 JSON 数据",
             hint_text='例如: {"2026-09-09": 60}',
             multiline=True,
             min_lines=2,
-            max_lines=5,
-            text_size=12,
+            max_lines=4,
+            text_size=11,
         )
         status_text = ft.Text("", size=11, color=ft.Colors.GREEN_700)
 
-        def copy_backup(e):
-            """将当前打卡数据 JSON 复制到剪贴板"""
+        def set_clipboard_compat(text: str) -> bool:
+            """跨平台剪贴板复制兼容方法：支持 Windows、Flutter/Flet 各版本与剪贴板工具"""
+            # 1. 优先尝试 Windows 本地系统剪贴板 (clip.exe)
             try:
-                page.set_clipboard(json_str)
+                import subprocess
+                proc = subprocess.Popen("clip", stdin=subprocess.PIPE, shell=True)
+                proc.communicate(text.encode("utf-8"))
+                if proc.returncode == 0:
+                    return True
+            except Exception:
+                pass
+
+            # 2. 尝试 Flet 官方 Clipboard 服务
+            try:
+                if hasattr(ft, "Clipboard"):
+                    cb = ft.Clipboard()
+                    if hasattr(cb, "set"):
+                        res = cb.set(text)
+                        if hasattr(res, "__await__"):
+                            import asyncio
+                            try:
+                                loop = asyncio.get_event_loop()
+                                if loop.is_running():
+                                    loop.create_task(res)
+                                else:
+                                    loop.run_until_complete(res)
+                            except Exception:
+                                pass
+                        return True
+            except Exception:
+                pass
+
+            # 3. 尝试 page 原生属性
+            for attr in ["clipboard", "set_clipboard"]:
+                if hasattr(page, attr):
+                    func = getattr(page, attr)
+                    try:
+                        if callable(func):
+                            func(text)
+                        elif hasattr(func, "set"):
+                            func.set(text)
+                        return True
+                    except Exception:
+                        pass
+
+            return False
+
+        def copy_backup(e):
+            """执行备份数据复制"""
+            success = set_clipboard_compat(json_str)
+            if success:
                 status_text.value = f"已复制到剪贴板！共 {len(records)} 条打卡记录，可发到微信保存。"
                 status_text.color = ft.Colors.GREEN_700
-                page.update()
-            except Exception as ex:
-                status_text.value = f"复制失败: {ex}"
-                status_text.color = ft.Colors.RED_600
-                page.update()
+            else:
+                status_text.value = "已生成上方数据框，您可直接在上方框中长按全选并复制！"
+                status_text.color = ft.Colors.AMBER_800
+            page.update()
 
         def do_restore(e):
             """解析并恢复导入的用户体重数据"""
@@ -589,13 +644,14 @@ def main(page: ft.Page):
             content=ft.Container(
                 content=ft.Column(
                     controls=[
-                        ft.Text("一键导出备份（复制到微信/备忘录保存）：", size=12, weight=ft.FontWeight.BOLD),
+                        ft.Text("一键导出备份（防换机/重装丢失）：", size=12, weight=ft.FontWeight.BOLD),
+                        backup_display,
                         ft.FilledButton(
                             "复制当前数据到剪贴板",
                             icon=ft.Icons.COPY,
                             on_click=copy_backup,
                         ),
-                        ft.Divider(height=12),
+                        ft.Divider(height=10),
                         ft.Text("一键导入恢复：", size=12, weight=ft.FontWeight.BOLD),
                         restore_input,
                         ft.FilledButton(
