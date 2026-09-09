@@ -6,6 +6,10 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
+# 授予工作流向仓库写入权限，以便初次自动保存签名证书
+permissions:
+  contents: write
+
 jobs:
   build-apk:
     name: 云端自动编译 Flet APK
@@ -14,6 +18,8 @@ jobs:
     steps:
       - name: 1. 检出仓库代码
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: 2. 配置 Python 3.11 环境
         uses: actions/setup-python@v5
@@ -27,15 +33,41 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
+      - name: 3.1 锁定固定签名密钥 (若仓库不存在则自动生成并提交入库)
+        run: |
+          if [ ! -f release.keystore ]; then
+            echo ">>> 正在为项目生成永久固定的专属发布密钥 release.keystore ..."
+            keytool -genkeypair -v -keystore release.keystore -keyalg RSA -keysize 2048 -validity 10000 \
+              -alias weightcalendar -dname "CN=WeightCalendar, OU=App, O=Personal, L=Beijing, ST=Beijing, C=CN" \
+              -storepass "weight123456" -keypass "weight123456"
+            git config --global user.name "github-actions[bot]"
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+            git add release.keystore
+            git commit -m "chore: 永久锁定 Android 发布签名密钥 release.keystore" || true
+            git push || true
+            echo ">>> 签名密钥生成并提交入库完毕！"
+          else
+            echo ">>> 检测到已有专属签名密钥 release.keystore，直接复用。"
+          fi
+
       - name: 4. 安装 Python 依赖与 Flet CLI
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install flet-cli
 
-      - name: 5. 编译生成 Android APK (自动应答自动下载匹配的 Flutter SDK)
+      - name: 5. 编译生成 Android APK (使用专属固定签名，解决覆盖安装签名不一致)
+        env:
+          FLET_ANDROID_SIGNING_KEY_STORE: release.keystore
+          FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: weight123456
+          FLET_ANDROID_SIGNING_KEY_ALIAS: weightcalendar
+          FLET_ANDROID_SIGNING_KEY_PASSWORD: weight123456
         run: |
-          yes | flet build apk --project "WeightCalendar" --org "com.weight.calendar" -vv
+          yes | flet build apk --project "WeightCalendar" --org "com.weight.calendar" \
+            --android-signing-key-store release.keystore \
+            --android-signing-key-store-password "weight123456" \
+            --android-signing-key-alias "weightcalendar" \
+            --android-signing-key-password "weight123456" -vv
 
       - name: 6. 上传编译产物 APK (供网页直接下载)
         uses: actions/upload-artifact@v4

@@ -534,6 +534,90 @@ def main(page: ft.Page):
         )
         show_dialog_compat(dlg)
 
+    def open_backup_restore_dialog():
+        """弹出数据备份与恢复对话框，支持一键复制导出 JSON 与粘贴导入恢复"""
+        json_str = json.dumps(records, ensure_ascii=False, indent=2)
+        restore_input = ft.TextField(
+            label="粘贴备份 JSON 数据",
+            hint_text='例如: {"2026-09-09": 60}',
+            multiline=True,
+            min_lines=2,
+            max_lines=5,
+            text_size=12,
+        )
+        status_text = ft.Text("", size=11, color=ft.Colors.GREEN_700)
+
+        def copy_backup(e):
+            """将当前打卡数据 JSON 复制到剪贴板"""
+            try:
+                page.set_clipboard(json_str)
+                status_text.value = f"已复制到剪贴板！共 {len(records)} 条打卡记录，可发到微信保存。"
+                status_text.color = ft.Colors.GREEN_700
+                page.update()
+            except Exception as ex:
+                status_text.value = f"复制失败: {ex}"
+                status_text.color = ft.Colors.RED_600
+                page.update()
+
+        def do_restore(e):
+            """解析并恢复导入的用户体重数据"""
+            raw = (restore_input.value or "").strip()
+            if not raw:
+                status_text.value = "请先粘贴备份的 JSON 数据！"
+                status_text.color = ft.Colors.RED_600
+                page.update()
+                return
+            try:
+                data = json.loads(raw)
+                if not isinstance(data, dict):
+                    raise ValueError("数据格式错误，需为字典键值对")
+                valid_count = 0
+                for k, v in data.items():
+                    datetime.date.fromisoformat(k)
+                    records[k] = float(v)
+                    valid_count += 1
+                save_data(records)
+                close_dialog_compat(dlg)
+                refresh_current_view()
+            except Exception as ex:
+                status_text.value = f"解析失败：{ex}，请检查格式"
+                status_text.color = ft.Colors.RED_600
+                page.update()
+
+        dlg = ft.AlertDialog(
+            title=ft.Text("数据备份与恢复"),
+            content=ft.Container(
+                content=ft.Column(
+                    controls=[
+                        ft.Text("一键导出备份（复制到微信/备忘录保存）：", size=12, weight=ft.FontWeight.BOLD),
+                        ft.FilledButton(
+                            "复制当前数据到剪贴板",
+                            icon=ft.Icons.COPY,
+                            on_click=copy_backup,
+                        ),
+                        ft.Divider(height=12),
+                        ft.Text("一键导入恢复：", size=12, weight=ft.FontWeight.BOLD),
+                        restore_input,
+                        ft.FilledButton(
+                            "确认恢复数据",
+                            icon=ft.Icons.DOWNLOAD,
+                            on_click=do_restore,
+                            style=ft.ButtonStyle(bgcolor=ft.Colors.GREEN_600),
+                        ),
+                        status_text,
+                    ],
+                    tight=True,
+                    spacing=6,
+                ),
+                width=320,
+            ),
+            actions=[
+                ft.TextButton("关闭", on_click=lambda e: close_dialog_compat(dlg))
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        show_dialog_compat(dlg)
+
     # ---------------- 手机端风格月度日历网格渲染 ----------------
     def build_calendar(year: int, month: int):
         """生成符合手机日历视觉体验的卡片日历网格"""
@@ -1021,6 +1105,14 @@ def main(page: ft.Page):
         center_title=True,
         bgcolor=ft.Colors.WHITE,
         elevation=0.5,
+        actions=[
+            ft.IconButton(
+                icon=ft.Icons.BACKUP_OUTLINED,
+                tooltip="数据备份与恢复",
+                icon_color=ft.Colors.BLUE_600,
+                on_click=lambda e: open_backup_restore_dialog(),
+            )
+        ],
     )
 
     main_view_container = ft.Container(content=build_calendar_view(), expand=True)
