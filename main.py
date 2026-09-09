@@ -319,7 +319,13 @@ def main(page: ft.Page):
     current_tab_index = 0  # 0: 日历打卡, 1: 趋势分析
     chart_range_limit = 15  # 折线图筛选范围：7, 15, 0 (0表示全部)
 
-    # ---------------- 统计计算辅助函数 ----------------
+    # ---------------- 统计计算与数值格式化辅助函数 ----------------
+    def format_weight_val(val: float | None) -> str:
+        """格式化体重数值显示：若是整数（如 60.0）则显示 60，带小数（如 61.1）则保留有效小数"""
+        if val is None:
+            return ""
+        return str(int(val)) if val == int(val) else f"{val:g}"
+
     def get_month_stats(year: int, month: int):
         """计算指定年月的统计信息：打卡天数、最新体重、月初至今增减"""
         prefix = f"{year:04d}-{month:02d}-"
@@ -562,7 +568,7 @@ def main(page: ft.Page):
                 else:
                     date_key = f"{year:04d}-{month:02d}-{day:02d}"
                     has_val = date_key in records
-                    weight_display = f"{records[date_key]}k" if has_val else ""
+                    weight_display = format_weight_val(records[date_key]) if has_val else ""
 
                     badge_text, badge_color, holiday_name = get_holiday_tag_info(year, month, day)
                     date_obj = datetime.date(year, month, day)
@@ -778,7 +784,7 @@ def main(page: ft.Page):
             content=ft.Row(
                 controls=[
                     build_mini_stat("本月打卡", f"{count} 天"),
-                    build_mini_stat("最新体重", f"{latest_val} kg" if latest_val else "--"),
+                    build_mini_stat("最新体重", f"{format_weight_val(latest_val)} kg" if latest_val else "--"),
                     build_mini_stat("本月浮动", diff_str, diff_color),
                 ],
                 alignment=ft.MainAxisAlignment.SPACE_AROUND,
@@ -795,7 +801,7 @@ def main(page: ft.Page):
                 content=ft.Row(
                     controls=[
                         ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN_600, size=20),
-                        ft.Text(f"今日已打卡：{records[today_str]} kg", size=13, weight=ft.FontWeight.W_500),
+                        ft.Text(f"今日已打卡：{format_weight_val(records[today_str])} kg", size=13, weight=ft.FontWeight.W_500),
                         ft.TextButton("修改", on_click=lambda e: open_record_dialog(today_str)),
                     ],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -874,10 +880,10 @@ def main(page: ft.Page):
         overview_card = ft.Container(
             content=ft.Row(
                 controls=[
-                    build_stat_box("当前体重", f"{cur_w} kg" if cur_w else "--"),
+                    build_stat_box("当前体重", f"{format_weight_val(cur_w)} kg" if cur_w else "--"),
                     build_stat_box("累计增减", tot_str, tot_color),
-                    build_stat_box("历史最低", f"{min_w} kg" if min_w else "--"),
-                    build_stat_box("历史最高", f"{max_w} kg" if max_w else "--"),
+                    build_stat_box("历史最低", f"{format_weight_val(min_w)} kg" if min_w else "--"),
+                    build_stat_box("历史最高", f"{format_weight_val(max_w)} kg" if max_w else "--"),
                 ],
                 alignment=ft.MainAxisAlignment.SPACE_AROUND,
             ),
