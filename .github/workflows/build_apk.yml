@@ -8,23 +8,38 @@ on:
 
 jobs:
   build-apk:
-    name: 官方 Flet 自动编译 APK
+    name: 云端自动编译 Flet APK
     runs-on: ubuntu-latest
 
     steps:
       - name: 1. 检出仓库代码
         uses: actions/checkout@v4
 
-      - name: 2. 官方 Flet 自动构建打包 APK (自动配置匹配的 Flutter 与 Android 工具链)
-        id: build
-        uses: flet-dev/flet-build-action@v1
+      - name: 2. 配置 Python 3.11 环境
+        uses: actions/setup-python@v5
         with:
-          target: apk
-          build-number: ${{ github.run_number }}
+          python-version: "3.11"
+          cache: "pip"
 
-      - name: 3. 上传编译产物 APK (供网页直接下载)
+      - name: 3. 配置 Java JDK 17 (Android 编译工具链所需)
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: 4. 安装 Python 依赖与 Flet CLI
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install flet-cli
+
+      - name: 5. 编译生成 Android APK (自动应答自动下载匹配的 Flutter SDK)
+        run: |
+          yes | flet build apk --project "WeightCalendar" --org "com.weight.calendar" -vv
+
+      - name: 6. 上传编译产物 APK (供网页直接下载)
         uses: actions/upload-artifact@v4
         with:
           name: WeightCalendar-Android-APK
-          path: ${{ steps.build.outputs.archive-path }}
+          path: build/apk/*.apk
           retention-days: 14
