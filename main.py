@@ -265,18 +265,62 @@ def get_holiday_tag_info(year: int, month: int, day: int):
 
 DATA_FILE = "weight_data.json"
 
+def get_weight(record) -> float | None:
+    """
+    从单条打卡记录中提取体重数值 (kg)：
+    向下兼容纯数字格式（历史版本）以及包含 weight 与 diet 键的字典结构（新版本）
+    """
+    if record is None:
+        return None
+    if isinstance(record, (int, float)):
+        return float(record)
+    if isinstance(record, dict):
+        w = record.get("weight")
+        try:
+            return float(w) if (w is not None and str(w).strip() != "") else None
+        except (ValueError, TypeError):
+            return None
+    return None
+
+def get_diet(record) -> str:
+    """
+    从单条打卡记录中提取饮食文字记录（当天吃了什么）：
+    若为历史纯数字记录或未记录饮食则返回空字符串
+    """
+    if isinstance(record, dict):
+        return str(record.get("diet") or "").strip()
+    return ""
+
 def load_data() -> dict:
-    """从本地 JSON 文件读取体重记录数据"""
+    """
+    从本地 JSON 文件读取打卡记录数据：
+    自动向下兼容历史纯数字记录（如 {"2026-09-10": 61.7}）
+    并统一解析为包含 weight（体重数值）与 diet（饮食文字）的标准字典结构
+    """
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                raw_data = json.load(f)
+                if not isinstance(raw_data, dict):
+                    return {}
+                cleaned = {}
+                for k, v in raw_data.items():
+                    if isinstance(v, (int, float)):
+                        cleaned[k] = {"weight": float(v), "diet": ""}
+                    elif isinstance(v, dict):
+                        cleaned[k] = {
+                            "weight": get_weight(v),
+                            "diet": get_diet(v),
+                        }
+                return cleaned
         except Exception:
             return {}
     return {}
 
 def save_data(data: dict):
-    """将体重记录数据持久化保存到本地 JSON 文件"""
+    """
+    将打卡数据（包含体重与饮食记录）持久化保存到本地 JSON 文件
+    """
     try:
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -314,6 +358,7 @@ def main(page: ft.Page):
     current_year = now.year
     current_month = now.month
     today_str = now.strftime("%Y-%m-%d")
+    selected_date_str = today_str  # 当前选中的日期（默认聚焦今天，点击日历各日期可联动切换）
 
     # 视图状态变量
     current_tab_index = 0  # 0: 日历打卡, 1: 趋势分析
@@ -327,15 +372,18 @@ def main(page: ft.Page):
         return str(int(val)) if val == int(val) else f"{val:g}"
 
     def get_month_stats(year: int, month: int):
-        """计算指定年月的统计信息：打卡天数、最新体重、月初至今增减"""
+        """计算指定年月的统计信息：打卡天数、最新体重、月初至今增减（基于有效体重记录计算）"""
         prefix = f"{year:04d}-{month:02d}-"
         month_keys = sorted([k for k in records.keys() if k.startswith(prefix)])
         if not month_keys:
             return 0, None, None
         count = len(month_keys)
-        latest_val = records[month_keys[-1]]
-        first_val = records[month_keys[0]]
-        diff = round(latest_val - first_val, 1)
+        weight_keys = [k for k in month_keys if get_weight(records[k]) is not None]
+        if not weight_keys:
+            return count, None, None
+        latest_val = get_weight(records[weight_keys[-1]])
+        first_val = get_weight(records[weight_keys[0]])
+        diff = round(latest_val - first_val, 1) if (latest_val is not None and first_val is not None) else None
         return count, latest_val, diff
 
     def get_overall_stats():
@@ -343,10 +391,13 @@ def main(page: ft.Page):
         if not records:
             return None, None, None, None
         sorted_keys = sorted(records.keys())
-        cur_val = records[sorted_keys[-1]]
-        first_val = records[sorted_keys[0]]
-        tot_diff = round(cur_val - first_val, 1)
-        weights = list(records.values())
+        weight_keys = [k for k in sorted_keys if get_weight(records[k]) is not None]
+        if not weight_keys:
+            return None, None, None, None
+        cur_val = get_weight(records[weight_keys[-1]])
+        first_val = get_weight(records[weight_keys[0]])
+        tot_diff = round(cur_val - first_val, 1) if (cur_val is not None and first_val is not None) else None
+        weights = [get_weight(records[k]) for k in weight_keys]
         min_val = min(weights)
         max_val = max(weights)
         return cur_val, tot_diff, min_val, max_val
@@ -384,7 +435,8 @@ def main(page: ft.Page):
                 height=180
             )
 
-        sorted_keys = sorted(records.keys())
+        # 仅筛选出记录了有效体重的日期绘制趋势折线
+        sorted_keys = sorted([k for k in records.keys() if get_weight(records[k]) is not None])
         if chart_range_limit > 0 and len(sorted_keys) > chart_range_limit:
             active_keys = sorted_keys[-chart_range_limit:]
         else:
@@ -407,10 +459,10 @@ def main(page: ft.Page):
 
         data_points = []
         x_labels = []
-        weights = [records[k] for k in active_keys]
+        weights = [get_weight(records[k]) for k in active_keys]
 
         for idx, date_str in enumerate(active_keys):
-            weight = records[date_str]
+            weight = get_weight(records[date_str])
             data_points.append(LineChartDataPoint(idx, weight))
             short_date = date_str[5:]  # 取 MM-DD
             x_labels.append(
@@ -487,35 +539,68 @@ def main(page: ft.Page):
             dlg.open = False
             page.update()
 
-    # ---------------- 体重记录与修改对话框 ----------------
+    # ---------------- 打卡记录与修改对话框（体重与饮食文字记录） ----------------
     def open_record_dialog(date_str: str):
-        """弹出指定日期的体重添加/编辑/删除对话框（针对手机端适配数字输入法）"""
-        existing_val = records.get(date_str, "")
+        """
+        弹出指定日期的打卡记录对话框：
+        提供体重数值输入与饮食文字记录区域（记录当天吃了什么），支持添加/修改/删除
+        """
+        existing_rec = records.get(date_str)
+        existing_weight = get_weight(existing_rec)
+        existing_diet = get_diet(existing_rec)
+
         weight_input = ft.TextField(
             label="体重 (kg)",
-            value=str(existing_val) if existing_val else "",
+            value=format_weight_val(existing_weight) if existing_weight is not None else "",
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="例如: 65.5",
-            autofocus=True,
+            autofocus=True if existing_weight is None else False,
+        )
+
+        diet_input = ft.TextField(
+            label="饮食记录（今天吃了什么）",
+            value=existing_diet,
+            hint_text="例如：早餐燕麦牛奶，午餐米饭牛肉，晚餐蔬菜沙拉...",
+            multiline=True,
+            min_lines=2,
+            max_lines=4,
         )
 
         def save_record(e):
-            """保存体重数据并刷新界面"""
-            val = weight_input.value.strip()
-            if val:
+            """保存打卡数据（包含体重与饮食文字）并刷新界面"""
+            w_str = (weight_input.value or "").strip()
+            d_str = (diet_input.value or "").strip()
+
+            w_val = None
+            if w_str:
                 try:
-                    records[date_str] = float(val)
-                    save_data(records)
+                    w_val = float(w_str)
                 except ValueError:
                     return
+
+            # 如果输入了体重或填写了饮食，保存该条打卡记录
+            if w_val is not None or d_str:
+                records[date_str] = {
+                    "weight": w_val,
+                    "diet": d_str,
+                }
+                save_data(records)
+            else:
+                # 若体重与饮食均被清空，且此前存在记录，则予以删除
+                if date_str in records:
+                    del records[date_str]
+                    save_data(records)
+
+            selected_date_str = date_str
             close_dialog_compat(dlg)
             refresh_current_view()
 
         def delete_record(e):
-            """删除指定日期的体重数据并刷新界面"""
+            """删除指定日期的打卡记录并刷新界面"""
             if date_str in records:
                 del records[date_str]
                 save_data(records)
+            selected_date_str = date_str
             close_dialog_compat(dlg)
             refresh_current_view()
 
@@ -527,8 +612,19 @@ def main(page: ft.Page):
             actions.insert(0, ft.TextButton("删除", on_click=delete_record, style=ft.ButtonStyle(color=ft.Colors.RED_400)))
 
         dlg = ft.AlertDialog(
-            title=ft.Text(f"记录体重：{date_str}"),
-            content=weight_input,
+            title=ft.Text(f"打卡记录：{date_str}"),
+            content=ft.Container(
+                content=ft.Column(
+                    controls=[
+                        weight_input,
+                        diet_input,
+                    ],
+                    tight=True,
+                    spacing=12,
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                width=320,
+            ),
             actions=actions,
             actions_alignment=ft.MainAxisAlignment.END,
         )
@@ -629,7 +725,13 @@ def main(page: ft.Page):
                 valid_count = 0
                 for k, v in data.items():
                     datetime.date.fromisoformat(k)
-                    records[k] = float(v)
+                    if isinstance(v, (int, float)):
+                        records[k] = {"weight": float(v), "diet": ""}
+                    elif isinstance(v, dict):
+                        records[k] = {
+                            "weight": get_weight(v),
+                            "diet": get_diet(v),
+                        }
                     valid_count += 1
                 save_data(records)
                 close_dialog_compat(dlg)
@@ -674,9 +776,22 @@ def main(page: ft.Page):
         )
         show_dialog_compat(dlg)
 
+    def on_cell_click(d: str):
+        """
+        日历单元格点击事件响应：
+        若点击未选中的日期，则切换为当前高亮聚焦日期，下方详情卡片联动展示该天的完整体重与饮食；
+        若再次点击已选中的日期，则直接打开打卡/修改对话框方便快速编辑。
+        """
+        nonlocal selected_date_str
+        if selected_date_str == d:
+            open_record_dialog(d)
+        else:
+            selected_date_str = d
+            refresh_current_view()
+
     # ---------------- 手机端风格月度日历网格渲染 ----------------
     def build_calendar(year: int, month: int):
-        """生成符合手机日历视觉体验的卡片日历网格"""
+        """生成符合手机日历视觉体验的卡片日历网格（直接展示体重与饮食文字摘要）"""
         month_matrix = calendar.monthcalendar(year, month)
         weekday_headers = ["一", "二", "三", "四", "五", "六", "日"]
 
@@ -704,89 +819,123 @@ def main(page: ft.Page):
             cols = []
             for day in week:
                 if day == 0:
-                    cols.append(ft.Container(expand=1, height=54))
+                    cols.append(ft.Container(expand=1, height=68))
                 else:
                     date_key = f"{year:04d}-{month:02d}-{day:02d}"
-                    has_val = date_key in records
-                    weight_display = format_weight_val(records[date_key]) if has_val else ""
+                    has_record = date_key in records
+                    rec = records.get(date_key)
+                    w_val = get_weight(rec)
+                    d_val = get_diet(rec)
+                    has_weight = (w_val is not None)
+                    weight_display = format_weight_val(w_val) if has_weight else ""
 
                     badge_text, badge_color, holiday_name = get_holiday_tag_info(year, month, day)
                     date_obj = datetime.date(year, month, day)
                     is_weekend = (date_obj.weekday() >= 5)
 
-                    # 判断是否为当前日期（今天）
+                    # 判断是否为当前高亮选中的聚焦日期，以及是否为真实今天
                     is_today = (date_key == today_str)
+                    is_selected = (date_key == selected_date_str)
 
                     # 样式判定规范：
-                    # 1. 体重记录日：淡蓝背景，浅蓝强调边框（若恰好为今日则边框加粗加深）
-                    # 2. 今日未记录：淡蓝背景，醒目蓝色边框，副文本标注“今天”
-                    # 3. 节假日（休）：浅蓝圆角卡片背景，蓝色大数字与节日名称
-                    # 4. 调休补班（班）：浅灰圆角卡片背景，黑色大数字
-                    # 5. 普通周末：无底色，清爽蓝色大数字
-                    # 6. 普通工作日：无底色，深黑色大数字
-                    cell_border = None
-                    if has_val:
-                        bg_color = ft.Colors.BLUE_50
-                        cell_border = border_all(2.0 if is_today else 1.2, ft.Colors.BLUE_600 if is_today else ft.Colors.BLUE_300) if border_all else None
+                    # 1. 选中高亮态：深蓝色强化边框 (2.0px)，卡片底色微调，强化聚焦感
+                    # 2. 打卡记录日：浅蓝背景与浅蓝边框
+                    # 3. 今日未记录：淡蓝背景与柔和蓝色边框
+                    # 4. 节假日（休）：浅蓝圆角卡片背景，蓝色大数字与节日名称
+                    # 5. 调休补班（班）：浅灰圆角卡片背景，黑色大数字
+                    # 6. 普通工作日/周末：清爽透明无底色
+                    if is_selected:
+                        bg_color = ft.Colors.BLUE_100 if has_record else ft.Colors.BLUE_50
+                        cell_border = border_all(2.0, ft.Colors.BLUE_600) if border_all else None
                         num_color = ft.Colors.BLUE_900
                         num_weight = ft.FontWeight.BOLD
+                    elif has_record:
+                        bg_color = ft.Colors.BLUE_50
+                        cell_border = border_all(1.5 if is_today else 1.2, ft.Colors.BLUE_500 if is_today else ft.Colors.BLUE_200) if border_all else None
+                        num_color = ft.Colors.BLUE_900
+                        num_weight = ft.FontWeight.BOLD
+                    elif is_today:
+                        bg_color = ft.Colors.BLUE_50
+                        cell_border = border_all(1.5, ft.Colors.BLUE_400) if border_all else None
+                        num_color = ft.Colors.BLUE_700
+                        num_weight = ft.FontWeight.BOLD
+                    elif badge_text == "休":
+                        bg_color = ft.Colors.BLUE_50
+                        cell_border = None
+                        num_color = ft.Colors.BLUE_600
+                        num_weight = ft.FontWeight.BOLD
+                    elif badge_text == "班":
+                        bg_color = ft.Colors.GREY_100
+                        cell_border = None
+                        num_color = ft.Colors.GREY_900
+                        num_weight = ft.FontWeight.BOLD
+                    elif is_weekend:
+                        bg_color = ft.Colors.TRANSPARENT
+                        cell_border = None
+                        num_color = ft.Colors.BLUE_500
+                        num_weight = ft.FontWeight.W_500
+                    else:
+                        bg_color = ft.Colors.TRANSPARENT
+                        cell_border = None
+                        num_color = ft.Colors.GREY_900
+                        num_weight = ft.FontWeight.W_500
+
+                    # 副文本计算：第二行优先展示体重；无体重则展示节日名；若只记了饮食无体重则展示饮食摘要
+                    if has_weight:
                         sub_text = weight_display
                         sub_color = ft.Colors.BLUE_700
                         sub_weight = ft.FontWeight.BOLD
-                    elif is_today:
-                        bg_color = ft.Colors.BLUE_50
-                        cell_border = border_all(1.6, ft.Colors.BLUE_500) if border_all else None
-                        num_color = ft.Colors.BLUE_700
-                        num_weight = ft.FontWeight.BOLD
-                        sub_text = holiday_name if holiday_name else ""
-                        sub_color = ft.Colors.BLUE_600 if sub_text else ft.Colors.TRANSPARENT
-                        sub_weight = ft.FontWeight.W_500
-                    elif badge_text == "休":
-                        bg_color = ft.Colors.BLUE_50
-                        num_color = ft.Colors.BLUE_600
-                        num_weight = ft.FontWeight.BOLD
-                        sub_text = holiday_name if holiday_name else ""
+                    elif holiday_name:
+                        sub_text = holiday_name
                         sub_color = ft.Colors.BLUE_600
                         sub_weight = ft.FontWeight.W_500
-                    elif badge_text == "班":
-                        bg_color = ft.Colors.GREY_100
-                        num_color = ft.Colors.GREY_900
-                        num_weight = ft.FontWeight.BOLD
-                        sub_text = ""
-                        sub_color = ft.Colors.TRANSPARENT
-                        sub_weight = ft.FontWeight.NORMAL
-                    elif is_weekend:
-                        bg_color = ft.Colors.TRANSPARENT
-                        num_color = ft.Colors.BLUE_500
-                        num_weight = ft.FontWeight.W_500
-                        sub_text = ""
-                        sub_color = ft.Colors.TRANSPARENT
-                        sub_weight = ft.FontWeight.NORMAL
+                    elif d_val:
+                        sub_text = d_val
+                        sub_color = ft.Colors.AMBER_900
+                        sub_weight = ft.FontWeight.W_500
                     else:
-                        bg_color = ft.Colors.TRANSPARENT
-                        num_color = ft.Colors.GREY_900
-                        num_weight = ft.FontWeight.W_500
                         sub_text = ""
                         sub_color = ft.Colors.TRANSPARENT
                         sub_weight = ft.FontWeight.NORMAL
 
-                    # 日期数字控件：统一使用文本，高亮完全由单元格卡片的淡蓝底色与蓝色边框呈现，去除内部圆圈
-                    num_widget = ft.Text(str(day), size=14, weight=num_weight, color=num_color)
+                    # 日期数字控件：统一使用文本
+                    num_widget = ft.Text(str(day), size=13, weight=num_weight, color=num_color)
 
                     col_controls = [num_widget]
                     if sub_text:
                         col_controls.append(
-                            ft.Text(sub_text, size=10, weight=sub_weight, color=sub_color)
+                            ft.Text(
+                                sub_text,
+                                size=10 if has_weight else 9,
+                                weight=sub_weight,
+                                color=sub_color,
+                                max_lines=1,
+                                overflow=ft.TextOverflow.ELLIPSIS,
+                                text_align=ft.TextAlign.CENTER,
+                            )
+                        )
+                    # 第三行：若既有体重又有饮食，在第三行直接呈现紧凑的饮食文字摘要
+                    if has_weight and d_val:
+                        col_controls.append(
+                            ft.Text(
+                                d_val,
+                                size=9,
+                                color=ft.Colors.AMBER_900,
+                                weight=ft.FontWeight.W_500,
+                                max_lines=1,
+                                overflow=ft.TextOverflow.ELLIPSIS,
+                                text_align=ft.TextAlign.CENTER,
+                            )
                         )
 
-                    # 居中层容器：铺满整个单元格卡片，保证日期与副文本绝对居中
+                    # 居中层容器：铺满整个单元格卡片，行距紧凑排列 (spacing=0)，信息聚合居中呈现
                     cell_stack_controls = [
                         ft.Container(
                             content=ft.Column(
                                 controls=col_controls,
                                 alignment=ft.MainAxisAlignment.CENTER,
                                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                                spacing=1,
+                                spacing=0,
                             ),
                             alignment=ALIGN_CENTER,
                             top=0,
@@ -796,7 +945,7 @@ def main(page: ft.Page):
                         )
                     ]
 
-                    # 右上角小圆徽标：班为橙色圆点，休为蓝色圆点（固定在单元格真实右上角，杜绝遮挡文字）
+                    # 右上角小圆徽标：班为橙色圆点，休为蓝色圆点（固定在右上角）
                     if badge_text:
                         cell_stack_controls.append(
                             ft.Container(
@@ -818,11 +967,11 @@ def main(page: ft.Page):
                             expand=True,
                         ),
                         expand=1,
-                        height=54,
+                        height=68,
                         border_radius=10,
                         bgcolor=bg_color,
                         border=cell_border,
-                        on_click=lambda e, d=date_key: open_record_dialog(d),
+                        on_click=lambda e, d=date_key: on_cell_click(d),
                     )
                     cols.append(cell)
             calendar_rows.append(ft.Row(controls=cols, spacing=3))
@@ -835,10 +984,9 @@ def main(page: ft.Page):
             border_radius=14,
         )
 
-    # ---------------- 视图构建：Tab 1 日历打卡视图 ----------------
     def change_month(delta: int):
-        """切换月份并刷新日历打卡视图"""
-        nonlocal current_year, current_month
+        """切换月份并刷新日历打卡视图，自动对齐当前选中日期"""
+        nonlocal current_year, current_month, selected_date_str
         current_month += delta
         if current_month > 12:
             current_month = 1
@@ -846,13 +994,18 @@ def main(page: ft.Page):
         elif current_month < 1:
             current_month = 12
             current_year -= 1
+        if current_year == now.year and current_month == now.month:
+            selected_date_str = today_str
+        else:
+            selected_date_str = f"{current_year:04d}-{current_month:02d}-01"
         refresh_current_view()
 
     def jump_to_today():
-        """快速返回今天所在的年月"""
-        nonlocal current_year, current_month
+        """快速返回今天所在的年月并选中今天"""
+        nonlocal current_year, current_month, selected_date_str
         current_year = now.year
         current_month = now.month
+        selected_date_str = today_str
         refresh_current_view()
 
     def build_calendar_view():
@@ -935,34 +1088,90 @@ def main(page: ft.Page):
             border=border_all(1, ft.Colors.GREY_200) if border_all else None,
         )
 
-        # 今日打卡状态提示卡片
-        if today_str in records:
-            today_card = ft.Container(
-                content=ft.Row(
+        # 选中日期打卡状态与饮食详情卡片（联动日历点击实时切换展示）
+        is_sel_today = (selected_date_str == today_str)
+        date_title_prefix = "今日打卡" if is_sel_today else f"{selected_date_str} 打卡详情"
+
+        if selected_date_str in records:
+            sel_rec = records[selected_date_str]
+            sel_w = get_weight(sel_rec)
+            sel_d = get_diet(sel_rec)
+
+            if sel_w is not None:
+                title_msg = f"{date_title_prefix}：{format_weight_val(sel_w)} kg"
+            elif sel_d:
+                title_msg = f"{date_title_prefix}：已记录饮食"
+            else:
+                title_msg = f"{date_title_prefix}：已打卡"
+
+            card_controls = [
+                ft.Row(
                     controls=[
-                        ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN_600, size=20),
-                        ft.Text(f"今日已打卡：{format_weight_val(records[today_str])} kg", size=13, weight=ft.FontWeight.W_500),
-                        ft.TextButton("修改", on_click=lambda e: open_record_dialog(today_str)),
+                        ft.Row(
+                            controls=[
+                                ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN_600, size=20),
+                                ft.Text(title_msg, size=13, weight=ft.FontWeight.W_500),
+                            ],
+                            spacing=6,
+                        ),
+                        ft.TextButton("修改", on_click=lambda e: open_record_dialog(selected_date_str)),
                     ],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                ),
+                )
+            ]
+            if sel_d:
+                card_controls.append(
+                    ft.Row(
+                        controls=[
+                            ft.Icon(ft.Icons.RESTAURANT_MENU, size=15, color=ft.Colors.AMBER_800),
+                            ft.Text(
+                                f"饮食：{sel_d}",
+                                size=13,
+                                color=ft.Colors.GREY_800,
+                                selectable=True,
+                                expand=True,
+                            ),
+                        ],
+                        spacing=6,
+                    )
+                )
+            else:
+                card_controls.append(
+                    ft.Row(
+                        controls=[
+                            ft.Icon(ft.Icons.INFO_OUTLINE, size=13, color=ft.Colors.GREY_400),
+                            ft.Text("当天暂未记录饮食（点击右上角修改可添加）", size=11, color=ft.Colors.GREY_500),
+                        ],
+                        spacing=6,
+                    )
+                )
+
+            detail_card = ft.Container(
+                content=ft.Column(controls=card_controls, spacing=5),
                 bgcolor=ft.Colors.GREEN_50,
-                padding=ft.Padding(14, 8, 14, 8),
+                padding=ft.Padding(14, 10, 14, 10),
                 border_radius=10,
+                border=border_all(1, ft.Colors.GREEN_200) if border_all else None,
             )
         else:
-            today_card = ft.Container(
+            detail_card = ft.Container(
                 content=ft.Row(
                     controls=[
-                        ft.Icon(ft.Icons.EDIT_CALENDAR, color=ft.Colors.BLUE_600, size=20),
-                        ft.Text("今天尚未记录体重", size=13, color=ft.Colors.GREY_800),
-                        ft.FilledButton("立即打卡", on_click=lambda e: open_record_dialog(today_str)),
+                        ft.Row(
+                            controls=[
+                                ft.Icon(ft.Icons.EDIT_CALENDAR, color=ft.Colors.BLUE_600, size=20),
+                                ft.Text(f"{'今天' if is_sel_today else selected_date_str} 尚未记录打卡", size=13, color=ft.Colors.GREY_800),
+                            ],
+                            spacing=6,
+                        ),
+                        ft.FilledButton("立即打卡", on_click=lambda e: open_record_dialog(selected_date_str)),
                     ],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 ),
                 bgcolor=ft.Colors.BLUE_50,
-                padding=ft.Padding(14, 8, 14, 8),
+                padding=ft.Padding(14, 10, 14, 10),
                 border_radius=10,
+                border=border_all(1, ft.Colors.BLUE_200) if border_all else None,
             )
 
         return ft.Container(
@@ -971,7 +1180,7 @@ def main(page: ft.Page):
                     month_nav_row,
                     month_stats_card,
                     build_calendar(current_year, current_month),
-                    today_card,
+                    detail_card,
                 ],
                 spacing=10,
                 scroll=ft.ScrollMode.AUTO,
@@ -1093,34 +1302,64 @@ def main(page: ft.Page):
             )
         else:
             for d in sorted_keys:
-                w_val = records[d]
+                rec = records[d]
+                w_val = get_weight(rec)
+                d_val = get_diet(rec)
+                w_text = f"{format_weight_val(w_val)} kg" if w_val is not None else "--"
+
+                item_controls = [
+                    ft.Row(
+                        controls=[
+                            ft.Row(
+                                controls=[
+                                    ft.Icon(ft.Icons.CALENDAR_TODAY, size=16, color=ft.Colors.BLUE_500),
+                                    ft.Text(d, size=14, weight=ft.FontWeight.W_500),
+                                ],
+                                spacing=8,
+                            ),
+                            ft.Row(
+                                controls=[
+                                    ft.Text(w_text, size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900),
+                                    ft.IconButton(
+                                        icon=ft.Icons.EDIT_OUTLINED,
+                                        icon_size=18,
+                                        icon_color=ft.Colors.GREY_600,
+                                        tooltip="编辑",
+                                        on_click=lambda e, date_str=d: open_record_dialog(date_str),
+                                    ),
+                                ],
+                                spacing=4,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    )
+                ]
+
+                # 若当天记录了饮食，在明细卡片中展示饮食详情
+                if d_val:
+                    item_controls.append(
+                        ft.Container(
+                            content=ft.Row(
+                                controls=[
+                                    ft.Icon(ft.Icons.RESTAURANT_MENU, size=13, color=ft.Colors.AMBER_800),
+                                    ft.Text(
+                                        d_val,
+                                        size=12,
+                                        color=ft.Colors.GREY_700,
+                                        max_lines=2,
+                                        overflow=ft.TextOverflow.ELLIPSIS,
+                                        expand=True,
+                                    ),
+                                ],
+                                spacing=6,
+                            ),
+                            padding=ft.Padding(24, 0, 0, 4),
+                        )
+                    )
+
                 history_items.append(
                     ft.Container(
-                        content=ft.Row(
-                            controls=[
-                                ft.Row(
-                                    controls=[
-                                        ft.Icon(ft.Icons.CALENDAR_TODAY, size=16, color=ft.Colors.BLUE_500),
-                                        ft.Text(d, size=14, weight=ft.FontWeight.W_500),
-                                    ],
-                                    spacing=8,
-                                ),
-                                ft.Row(
-                                    controls=[
-                                        ft.Text(f"{w_val} kg", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900),
-                                        ft.IconButton(
-                                            icon=ft.Icons.EDIT_OUTLINED,
-                                            icon_size=18,
-                                            icon_color=ft.Colors.GREY_600,
-                                            tooltip="编辑",
-                                            on_click=lambda e, date_str=d: open_record_dialog(date_str),
-                                        ),
-                                    ],
-                                    spacing=4,
-                                ),
-                            ],
-                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        ),
+                        content=ft.Column(controls=item_controls, spacing=2),
                         padding=ft.Padding(8, 6, 8, 6),
                         border=ft.Border(bottom=ft.BorderSide(0.5, ft.Colors.GREY_200)),
                     )
@@ -1212,15 +1451,6 @@ def main(page: ft.Page):
         on_change=handle_nav_change,
         bgcolor=ft.Colors.WHITE,
         elevation=8,
-    )
-
-    # 快捷悬浮打卡按钮（移动端圆形加号按钮）
-    page.floating_action_button = ft.FloatingActionButton(
-        icon=ft.Icons.ADD,
-        tooltip="记今天",
-        bgcolor=ft.Colors.BLUE_600,
-        foreground_color=ft.Colors.WHITE,
-        on_click=lambda e: open_record_dialog(today_str),
     )
 
     # 使用 SafeArea 包裹主界面，全面兼容 Android 手机屏幕打孔、刘海屏及底部手势黑条
