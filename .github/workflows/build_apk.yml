@@ -75,3 +75,23 @@ jobs:
           name: WeightCalendar-Android-APK
           path: build/apk/*.apk
           retention-days: 14
+
+      - name: 7. 自动发布到 GitHub Releases (直接下载 APK 安装包，无需解压 zip)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 提取打包出的 apk 文件并统一重命名为 WeightCalendar.apk
+          APK_FILE=$(ls build/apk/*.apk | head -n 1)
+          if [ -f "$APK_FILE" ]; then
+            cp "$APK_FILE" WeightCalendar.apk
+            TAG_NAME="v1.0.${{ github.run_number }}"
+            # 若已存在则更新附件，否则创建新 Release 发布
+            if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+              gh release upload "$TAG_NAME" WeightCalendar.apk --clobber
+            else
+              gh release create "$TAG_NAME" WeightCalendar.apk \
+                --title "体重日历 $TAG_NAME" \
+                --notes "📱 **安装包下载**：直接点击下方 Assets 中的 **WeightCalendar.apk** 即可下载安装，无需解压！"
+            fi
+          fi
+
