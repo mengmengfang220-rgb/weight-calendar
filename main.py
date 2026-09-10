@@ -291,11 +291,20 @@ def get_diet(record) -> str:
         return str(record.get("diet") or "").strip()
     return ""
 
+def get_note(record) -> str:
+    """
+    从单条打卡记录中提取状态备注（如运动、生病、身体状态等）：
+    若为历史版本或未记录状态则返回空字符串
+    """
+    if isinstance(record, dict):
+        return str(record.get("note") or "").strip()
+    return ""
+
 def load_data() -> dict:
     """
     从本地 JSON 文件读取打卡记录数据：
-    自动向下兼容历史纯数字记录（如 {"2026-09-10": 61.7}）
-    并统一解析为包含 weight（体重数值）与 diet（饮食文字）的标准字典结构
+    自动向下兼容历史纯数字或旧版字典记录格式，
+    统一解析为包含 weight（体重）、diet（饮食）与 note（状态备注）的标准字典结构
     """
     if os.path.exists(DATA_FILE):
         try:
@@ -306,11 +315,12 @@ def load_data() -> dict:
                 cleaned = {}
                 for k, v in raw_data.items():
                     if isinstance(v, (int, float)):
-                        cleaned[k] = {"weight": float(v), "diet": ""}
+                        cleaned[k] = {"weight": float(v), "diet": "", "note": ""}
                     elif isinstance(v, dict):
                         cleaned[k] = {
                             "weight": get_weight(v),
                             "diet": get_diet(v),
+                            "note": get_note(v),
                         }
                 return cleaned
         except Exception:
@@ -539,15 +549,16 @@ def main(page: ft.Page):
             dlg.open = False
             page.update()
 
-    # ---------------- 打卡记录与修改对话框（体重与饮食文字记录） ----------------
+    # ---------------- 打卡记录与修改对话框（体重、饮食与状态备注） ----------------
     def open_record_dialog(date_str: str):
         """
         弹出指定日期的打卡记录对话框：
-        提供体重数值输入与饮食文字记录区域（记录当天吃了什么），支持添加/修改/删除
+        提供体重数值、饮食文字及状态备注（如运动、生病、身体状态等）输入区域，支持添加/修改/删除
         """
         existing_rec = records.get(date_str)
         existing_weight = get_weight(existing_rec)
         existing_diet = get_diet(existing_rec)
+        existing_note = get_note(existing_rec)
 
         weight_input = ft.TextField(
             label="体重 (kg)",
@@ -563,13 +574,23 @@ def main(page: ft.Page):
             hint_text="例如：早餐燕麦牛奶，午餐米饭牛肉，晚餐蔬菜沙拉...",
             multiline=True,
             min_lines=2,
-            max_lines=4,
+            max_lines=3,
+        )
+
+        note_input = ft.TextField(
+            label="状态备注（如运动、生病、身体状态等）",
+            value=existing_note,
+            hint_text="例如：慢跑5公里、感冒发烧、生理期、熬夜加班...",
+            multiline=True,
+            min_lines=1,
+            max_lines=3,
         )
 
         def save_record(e):
-            """保存打卡数据（包含体重与饮食文字）并刷新界面"""
+            """保存打卡数据（包含体重、饮食及状态备注）并刷新界面"""
             w_str = (weight_input.value or "").strip()
             d_str = (diet_input.value or "").strip()
+            n_str = (note_input.value or "").strip()
 
             w_val = None
             if w_str:
@@ -578,15 +599,16 @@ def main(page: ft.Page):
                 except ValueError:
                     return
 
-            # 如果输入了体重或填写了饮食，保存该条打卡记录
-            if w_val is not None or d_str:
+            # 如果输入了体重、填写了饮食或记录了状态，保存该条打卡记录
+            if w_val is not None or d_str or n_str:
                 records[date_str] = {
                     "weight": w_val,
                     "diet": d_str,
+                    "note": n_str,
                 }
                 save_data(records)
             else:
-                # 若体重与饮食均被清空，且此前存在记录，则予以删除
+                # 若三项均被清空，且此前存在记录，则予以删除
                 if date_str in records:
                     del records[date_str]
                     save_data(records)
@@ -618,9 +640,10 @@ def main(page: ft.Page):
                     controls=[
                         weight_input,
                         diet_input,
+                        note_input,
                     ],
                     tight=True,
-                    spacing=12,
+                    spacing=10,
                     scroll=ft.ScrollMode.AUTO,
                 ),
                 width=320,
@@ -726,11 +749,12 @@ def main(page: ft.Page):
                 for k, v in data.items():
                     datetime.date.fromisoformat(k)
                     if isinstance(v, (int, float)):
-                        records[k] = {"weight": float(v), "diet": ""}
+                        records[k] = {"weight": float(v), "diet": "", "note": ""}
                     elif isinstance(v, dict):
                         records[k] = {
                             "weight": get_weight(v),
                             "diet": get_diet(v),
+                            "note": get_note(v),
                         }
                     valid_count += 1
                 save_data(records)
@@ -826,6 +850,7 @@ def main(page: ft.Page):
                     rec = records.get(date_key)
                     w_val = get_weight(rec)
                     d_val = get_diet(rec)
+                    n_val = get_note(rec)
                     has_weight = (w_val is not None)
                     weight_display = format_weight_val(w_val) if has_weight else ""
 
@@ -880,7 +905,7 @@ def main(page: ft.Page):
                         num_color = ft.Colors.GREY_900
                         num_weight = ft.FontWeight.W_500
 
-                    # 副文本计算：第二行优先展示体重；无体重则展示节日名；若只记了饮食无体重则展示饮食摘要
+                    # 副文本计算：第二行优先展示体重；无体重则展示节日名；若只记了饮食/状态无体重则展示对应文本
                     if has_weight:
                         sub_text = weight_display
                         sub_color = ft.Colors.BLUE_700
@@ -892,6 +917,10 @@ def main(page: ft.Page):
                     elif d_val:
                         sub_text = d_val
                         sub_color = ft.Colors.AMBER_900
+                        sub_weight = ft.FontWeight.W_500
+                    elif n_val:
+                        sub_text = n_val
+                        sub_color = ft.Colors.TEAL_800
                         sub_weight = ft.FontWeight.W_500
                     else:
                         sub_text = ""
@@ -914,13 +943,37 @@ def main(page: ft.Page):
                                 text_align=ft.TextAlign.CENTER,
                             )
                         )
-                    # 第三行：若既有体重又有饮食，在第三行直接呈现紧凑的饮食文字摘要
-                    if has_weight and d_val:
+
+                    # 第三行：展示紧凑的饮食或状态摘要（若既有饮食又有状态则优雅连接展示）
+                    summary_text = ""
+                    summary_color = ft.Colors.AMBER_900
+                    if d_val and n_val:
+                        summary_text = f"{d_val} · {n_val}"
+                    elif d_val:
+                        summary_text = d_val
+                    elif n_val:
+                        summary_text = n_val
+                        summary_color = ft.Colors.TEAL_800
+
+                    if has_weight and summary_text:
                         col_controls.append(
                             ft.Text(
-                                d_val,
+                                summary_text,
                                 size=9,
-                                color=ft.Colors.AMBER_900,
+                                color=summary_color,
+                                weight=ft.FontWeight.W_500,
+                                max_lines=1,
+                                overflow=ft.TextOverflow.ELLIPSIS,
+                                text_align=ft.TextAlign.CENTER,
+                            )
+                        )
+                    elif not has_weight and d_val and n_val:
+                        # 若无体重但既有饮食又有状态，第二行展示饮食，第三行展示状态
+                        col_controls.append(
+                            ft.Text(
+                                n_val,
+                                size=9,
+                                color=ft.Colors.TEAL_800,
                                 weight=ft.FontWeight.W_500,
                                 max_lines=1,
                                 overflow=ft.TextOverflow.ELLIPSIS,
@@ -1096,11 +1149,12 @@ def main(page: ft.Page):
             sel_rec = records[selected_date_str]
             sel_w = get_weight(sel_rec)
             sel_d = get_diet(sel_rec)
+            sel_n = get_note(sel_rec)
 
             if sel_w is not None:
                 title_msg = f"{date_title_prefix}：{format_weight_val(sel_w)} kg"
-            elif sel_d:
-                title_msg = f"{date_title_prefix}：已记录饮食"
+            elif sel_d or sel_n:
+                title_msg = f"{date_title_prefix}：已打卡"
             else:
                 title_msg = f"{date_title_prefix}：已打卡"
 
@@ -1135,12 +1189,28 @@ def main(page: ft.Page):
                         spacing=6,
                     )
                 )
-            else:
+            if sel_n:
+                card_controls.append(
+                    ft.Row(
+                        controls=[
+                            ft.Icon(ft.Icons.DIRECTIONS_RUN, size=15, color=ft.Colors.TEAL_700),
+                            ft.Text(
+                                f"状态：{sel_n}",
+                                size=13,
+                                color=ft.Colors.GREY_800,
+                                selectable=True,
+                                expand=True,
+                            ),
+                        ],
+                        spacing=6,
+                    )
+                )
+            if not sel_d and not sel_n:
                 card_controls.append(
                     ft.Row(
                         controls=[
                             ft.Icon(ft.Icons.INFO_OUTLINE, size=13, color=ft.Colors.GREY_400),
-                            ft.Text("当天暂未记录饮食（点击右上角修改可添加）", size=11, color=ft.Colors.GREY_500),
+                            ft.Text("当天暂未记录饮食与状态备注（点击右上角修改可添加）", size=11, color=ft.Colors.GREY_500),
                         ],
                         spacing=6,
                     )
@@ -1305,6 +1375,7 @@ def main(page: ft.Page):
                 rec = records[d]
                 w_val = get_weight(rec)
                 d_val = get_diet(rec)
+                n_val = get_note(rec)
                 w_text = f"{format_weight_val(w_val)} kg" if w_val is not None else "--"
 
                 item_controls = [
@@ -1344,6 +1415,28 @@ def main(page: ft.Page):
                                     ft.Icon(ft.Icons.RESTAURANT_MENU, size=13, color=ft.Colors.AMBER_800),
                                     ft.Text(
                                         d_val,
+                                        size=12,
+                                        color=ft.Colors.GREY_700,
+                                        max_lines=2,
+                                        overflow=ft.TextOverflow.ELLIPSIS,
+                                        expand=True,
+                                    ),
+                                ],
+                                spacing=6,
+                            ),
+                            padding=ft.Padding(24, 0, 0, 4),
+                        )
+                    )
+
+                # 若当天记录了状态备注（如运动、生病等），在明细卡片中展示状态详情
+                if n_val:
+                    item_controls.append(
+                        ft.Container(
+                            content=ft.Row(
+                                controls=[
+                                    ft.Icon(ft.Icons.DIRECTIONS_RUN, size=13, color=ft.Colors.TEAL_700),
+                                    ft.Text(
+                                        n_val,
                                         size=12,
                                         color=ft.Colors.GREY_700,
                                         max_lines=2,
